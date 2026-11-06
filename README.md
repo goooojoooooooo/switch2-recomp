@@ -1,5 +1,9 @@
 # Pokopia Recomp
 
+> **This fork (branch `game/plza`) adds Pokémon Legends: Z-A** (update v393216) as a second game: it boots to the first menus with
+> text, input (keyboard and pad) and graphics. Build and run steps: [recomp/games/plza/README.md](recomp/games/plza/README.md). As
+> upstream: no game files here; you need your own dump. Not affiliated with Nintendo, The Pokémon Company or GAME FREAK.
+
 Pokémon Pokopia (Switch 2) recompiled to run natively on Windows.
 
 [Download the latest build](https://github.com/drakolordx7/pokopia-recomp/releases/latest)

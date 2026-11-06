@@ -12,15 +12,34 @@ the repository: every id and hash comes from the player's own dump.
 | `CMakeLists.txt` | per-module libraries `plza_<module>` (pkp's, without the link check that points at the missing `../mpr`) |
 | `runtime/games/plza/` | game module: identity from the manifest, title facts from main.npdm (save sizes still placeholders), no play mode yet |
 
-## Use
+## Run (the path this branch was tested with)
 
-```
-python -I recomp/games/plza/fill_manifest.py --exefs <dump>\exefs --version <x.y.z>
-python -I recomp/scripts/check_manifest.py --strict plza
-recomp\scripts\build_game.cmd plza
-```
+You need **your own dump** of Legends Z-A, update v393216 (decrypted `exefs/` and `romfs/`: the launcher's Set up or `nx_extract` from your
+NSP/XCI and your console's keys). Windows 10/11, a Vulkan 1.3 GPU, 16 GB of RAM. Tools: VS 2022+ Build Tools, LLVM (clang-cl), CMake,
+Ninja, Python 3.13+, .NET; zig 0.17 (e.g. the one in a Pokopia Recomp release, `tools/build/zig`). **Short paths** everywhere (checkout,
+build and game folders): with Windows long paths off, CMake and the game's save data fail in deep folders.
 
-Full step-by-step (dump, coverage, first boot, shaders, play mode, release): [BRINGUP.md](BRINGUP.md).
+1. Texture tools: `powershell -File tools\textures\scripts\fetch_third_party.ps1`, then `powershell -File tools\textures\scripts\build.ps1`.
+2. Runtime DLL (no game code in it):
+   ```
+   recomp\scripts\nx_env.cmd cmake -S game-build -B game-build\build\rt -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+       -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DGAME_BUILD_RT_DLL=ON -DGAME_MANIFEST=%CD%\recomp\games\plza\game.toml
+   recomp\scripts\nx_env.cmd cmake --build game-build\build\rt --target game_rt
+   ```
+3. The game exe from your dump (verify, lift ~1 min, compile ~45-60 min with 4 jobs, link):
+   ```
+   python -I recomp\games\plza\build_exe.py --exefs <dump>\updates\393216\exefs --rt game-build\build\rt --zig <zig.exe> ^
+       --work C:\plza\work --game C:\plza\game
+   ```
+4. In the game folder: `plza.ini` from `plza.ini.example` (point `[fs]` at your dump), then the shader cache: run `plza.exe` once for a
+   minute or two (`[nvn] dump_missing` writes every block the game makes), then
+   `spirv_harness --batch shader_dump --out shader_cache\spirv --no-val` (Pokopia Recomp 0.6.2's `tools/spirv_harness`; drop `--no-val`
+   when the Vulkan SDK's `spirv-val` is installed). 8,489 blocks in 19 s here. Run it again after new areas to pick up their shaders.
+5. `plza.exe` (window) or `plza.exe --headless --max-seconds 60` (test). Keyboard: controls.ini (Return/E = A, Space/Shift = B, WASD =
+   left stick, ...); pads work as on the console.
+
+Other versions of the game: `fill_manifest.py --exefs <their exefs> --version <n>` and `check_manifest.py --strict plza`; the hook site in
+`main.sites` (and anything else found by address) belongs to v393216. Full step-by-step for bring-up work: [BRINGUP.md](BRINGUP.md).
 `recomp/scripts/check_manifest.py` checks every `recomp/games/*/game.toml` against what CMake, `game_build.py`, the launcher and the
 runtime read, and that no two games share an id, save folder or launcher identifier.
 

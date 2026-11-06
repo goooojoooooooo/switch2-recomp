@@ -1,0 +1,20 @@
+; plza.ini: copy next to plza.exe. Keys: runtime/docs/CONFIG.md. Paths are relative to the game folder.
+; Keep the game folder's path short (well under 150 characters): with Windows' long paths off (the default), the save data's
+; working files pass 260 characters in a deep folder and nn::fs::IsSaveDataExisting aborts the game at boot.
+
+[fs]
+exefs = dump/updates/393216/exefs
+romfs = dump/updates/393216/romfs
+save_dir = save
+
+[memory]
+; the Switch 1 default is 8 GB and the run is stopped at the limit; Z-A was at 6.1 GB on its first menus
+limit_gb = 12
+
+[nvn]
+; the shader cache is shader_cache/spirv beside the exe. To fill it: run once with dump_missing (every untranslated block is written
+; there), then translate the folder:  spirv_harness --batch shader_dump --out shader_cache/spirv  (README.md, "Run")
+dump_missing = shader_dump
+
+[net]
+offline = true
