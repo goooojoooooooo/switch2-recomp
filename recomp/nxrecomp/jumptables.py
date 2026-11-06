@@ -7,6 +7,8 @@ read, and the bound from `cmp idx, #N; b.hi / b.hs`. Shapes understood:
   * clang's compressed tables:  adr/adrp+add anchor; ldrb/ldrh/ldrsb/ldrsh/ldrsw/ldr entry, [table, idx{, lsl #n}];
                                 add target, anchor, entry{, lsl #s}; br target
   * table-relative ldrsw tables (anchor = the table itself), as GCC / older clang emit them
+  * label tables of computed gotos (`goto *disptab[op]`, e.g. Lua 5.4's luaV_execute with jump tables): a static table of
+    absolute code pointers, adrp+add base; ldr target, [table, idx, lsl|uxtw|sxtw #3]; br target (_label_table)
 env.jt[br address] = sorted list of target addresses inside the function; the lifter then emits a switch over exactly
 those targets (default: call_indirect, so a target outside the list still works). A `br` that does not match keeps the
 fallback of smo-recomp (a dispatch over every instruction of the function), so nothing is ever lifted wrong.
@@ -17,6 +19,8 @@ import struct
 import capstone
 
 IMM = re.compile(r'#(-?0x[0-9a-f]+|-?\d+)')
+# register-indexed address operand: [base, index{, lsl|uxtw|sxtw #n}] (a w index needs uxtw/sxtw, as `ldr x9, [x24, w9, uxtw #3]`)
+INDEXED = re.compile(r'\[(\w+), ([xw]\d+)(?:, (?:lsl|uxtw|sxtw) #(\d+)|, (?:uxtw|sxtw))?\]')
 
 NO_DEST = {'str', 'strb', 'strh', 'stur', 'sturb', 'sturh', 'stp', 'stlr', 'stlrb', 'stlrh', 'st1', 'st2', 'st3', 'st4',
            'cmp', 'cmn', 'tst', 'fcmp', 'fcmpe', 'ccmp', 'ccmn', 'fccmp', 'b', 'bl', 'br', 'blr', 'ret', 'cbz', 'cbnz',
@@ -191,6 +195,39 @@ def _jump_table(img, f, br):
     return sorted(found) if found else None
 
 
+LABEL_TABLE_MAX = 1024   # entries read from a label table at most (Lua 5.4: 83 opcodes)
+
+
+def _label_table(img, f, br):
+    """Targets of a computed goto: `ldr xT, [table, idx, lsl|uxtw|sxtw #3]; br xT` where table is a constant (adrp+add) static
+    table of absolute code pointers. The table is read from its start while its entries point into this function (relocated
+    pointers: RELA or RELR); None unless there are at least two. A following object in the data that also points into the
+    function only adds a case to the switch, never removes one; the lifter's default (call_indirect) still covers the rest."""
+    reg = _regno(f.insns[br][1])
+    d = _find_def(f, br, reg)
+    if not d:
+        return None
+    a, mn, ops = d
+    if mn != 'ldr' or len(ops) < 2 or not isinstance(reg, int):
+        return None
+    m = INDEXED.match(ops[1])
+    if not m or m.group(3) != '3':
+        return None
+    base = _const(f, a, _regno(m.group(1)))
+    if base is None or not (img.base <= base < img.base + len(img.mem)):
+        return None
+    out = set()
+    for k in range(LABEL_TABLE_MAX):
+        p = base + 8 * k
+        if p + 8 > img.base + len(img.mem):
+            break
+        v = img.ptr_at(p - img.base)
+        if not (f.start <= v < f.end) or v & 3:
+            break
+        out.add(v)
+    return sorted(out) if len(out) >= 2 else None
+
+
 def _is_tail_br(img, f, br, depth=0):
     """True when the target of the unresolved `br` is a pointer taken from memory or passed in a register: an indirect
     tail call (virtual call through a vtable, function pointer, member-pointer thunk), never a computed jump inside the
@@ -221,7 +258,7 @@ def _is_tail_br_def(img, f, d):
     if mn.startswith('ldr') and len(ops) > 1 and re.match(r'\[(sp|x29|fp)[,\]]', ops[1]):
         return False                                       # same: `ldr x8, [sp, #n]` before `br x8` at -O0
     if mn.startswith('ldr') and len(ops) > 1 and '[' in ops[1]:
-        m = re.match(r'\[(\w+), ([xw]\d+)(?:, lsl #(\d+))?\]', ops[1])
+        m = INDEXED.match(ops[1])
         if m:                                               # indexed load: a static table of pointers?
             base = _const(f, a, _regno(m.group(1)))
             if base is not None and img.base <= base < img.base + len(img.mem):
@@ -277,6 +314,11 @@ def resolve(env):
             tg = _jump_table(img, f, b)
         except (KeyError, IndexError, ValueError, AttributeError, TypeError):
             tg = None
+        if not tg:
+            try:
+                tg = _label_table(img, f, b)
+            except (KeyError, IndexError, ValueError, AttributeError, TypeError):
+                tg = None
         if tg:
             env.jt[b] = tg
         else:
