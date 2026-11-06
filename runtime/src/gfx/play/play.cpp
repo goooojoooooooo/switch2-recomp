@@ -1221,7 +1221,8 @@ bool start(const StartOptions& opt) {
         if (gp && gp->install_render) gp->install_render(st.base, st.settings.display, ww, wh);   // the game's display options, tone curve
     }
     // the frame boundary, then the game's input, camera, lock-on and menu hooks (hooks of one address run in registration order)
-    if (gp && gp->frame_update) st.hook_update = hook_add_entry(st.base + gp->frame_update, &update_hook);
+    if (gp && gp->frame_update)   // update_hook returns 0: as a mid-site hook the guest code after the site still runs
+        st.hook_update = gp->frame_update_mid ? hook_add_mid(st.base + gp->frame_update, &update_hook) : hook_add_entry(st.base + gp->frame_update, &update_hook);
     else NXLOG_W(kTag, "the game (%s) names no frame update: play mode is not pumped", game::info().id);
     if (gp && gp->install) gp->install(st.base, &g_game_host, st.settings);
     st.started = true;

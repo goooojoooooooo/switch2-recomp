@@ -1216,15 +1216,45 @@ mem::ww::Region* tex_ww() {
     return g_tex_ww;
 }
 
-bool tex_ww_wanted(const Texture& t, const TexGpu& g) { return t.cpu_coherent && t.mem && t.storage_size && !g.gpu_written && tex_ww(); }
+// The same for textures in MapPhysicalMemory pages (the alias region): titles with nn::os virtual address memory keep their pools there,
+// not in the heap. Legends Z-A's text renderer rasterizes new glyphs into a coherent glyph cache texture in such memory; without this
+// region the first upload was all the GPU ever saw, and every character that came up later drew as nothing.
+mem::ww::Region* g_tex_ww_phys = nullptr;
+bool g_tex_ww_phys_tried = false;
+
+mem::ww::Region* tex_ww_phys() {
+    if (!g_tex_ww_phys_tried) {
+        g_tex_ww_phys_tried = true;
+        if (nxrt::config_get_bool("nvn", "tex_write_watch", true))
+            g_tex_ww_phys = mem::ww::region_create(mem::kAliasBase, mem::kAliasSize);
+    }
+    return g_tex_ww_phys;
+}
+
+// The region that tracks texture t's storage: the heap's for storage in the heap's primary view, the alias region's for storage in
+// MapPhysicalMemory pages; none for a heap alias view in the alias region (a write through the primary view would not fault there).
+mem::ww::Region* tex_ww_for(const Texture& t) {
+    const uint64_t a = reinterpret_cast<uint64_t>(t.mem), e = a + t.storage_size;
+    if (!a || e <= a) return nullptr;
+    if (mem::heap_exists() && a >= mem::kHeapBase && e <= mem::kHeapBase + mem::heap_reserved()) return tex_ww();
+    uint64_t off = 0;
+    if (a >= mem::kAliasBase && e <= mem::kAliasBase + mem::kAliasSize && !mem::heap_offset_of(a, &off)) return tex_ww_phys();
+    return nullptr;
+}
+
+bool tex_ww_wanted(const Texture& t, const TexGpu& g) { return t.cpu_coherent && t.mem && t.storage_size && !g.gpu_written && tex_ww_for(t); }
 
 void tex_ww_arm(const Texture& t, const TexGpu& g) {
     if (!tex_ww_wanted(t, g)) return;
-    mem::ww::Region* r = tex_ww();
+    mem::ww::Region* r = tex_ww_for(t);
     const uint64_t a = reinterpret_cast<uint64_t>(t.mem), base = mem::ww::region_base(r);
     if (a < base) return;
     const uint64_t first = (a - base) >> 12, last = (a + t.storage_size - 1 - base) >> 12;
-    mem::ww::arm(r, first, last - first + 1);   // false: a page it cannot protect (another view, a file read in progress): not watched
+    const bool ok = mem::ww::arm(r, first, last - first + 1);   // false: a page it cannot protect (another view, a file read in progress): not watched
+    static std::atomic<int> s_dbg{0};
+    if (s_dbg.fetch_add(1) < 2000)
+        NXLOG_D("nvn.texdbg", "texture %u: watch %s pages %llu..%llu: %s", t.id, r == g_tex_ww_phys ? "phys" : "heap",
+                static_cast<unsigned long long>(first), static_cast<unsigned long long>(last), ok ? "armed" : "NOT armed");
 }
 
 // ---- arming off the render thread ([nvn] tex_ww_async, default on) ---------------------------------------------------------------
@@ -1235,6 +1265,7 @@ void tex_ww_arm(const Texture& t, const TexGpu& g) {
 // same way (textures_cpu_wrote), so the texture is uploaded again. Nothing the CPU writes is missed; the only cost is that write's re-upload.
 struct ArmJob {
     Ref<Texture> t;
+    mem::ww::Region* r = nullptr;   // the region of the texture's storage (tex_ww_for)
     uint64_t first = 0, count = 0, hash = 0, seq = 0;
 };
 struct ArmQueue {
@@ -1270,7 +1301,11 @@ void arm_worker() {
         if (it == aq.latest.end() || it->second != j.seq) continue;   // a newer upload queued its own arm
         lk.unlock();
         if (!t->destroyed.load()) {
-            mem::ww::arm(g_tex_ww, j.first, j.count);   // false: a page it cannot protect: not watched (as the synchronous arm)
+            const bool armed = mem::ww::arm(j.r, j.first, j.count);   // false: a page it cannot protect: not watched (as the synchronous arm)
+            static std::atomic<int> s_dbg{0};
+            if (s_dbg.fetch_add(1) < 2000)
+                NXLOG_D("nvn.texdbg", "texture %u: watch (async) %s pages +%llu: %s", t->id, j.r == g_tex_ww_phys ? "phys" : "heap",
+                        static_cast<unsigned long long>(j.count), armed ? "armed" : "NOT armed");
             uint64_t h = 0;
             const bool same = texprep::hash_storage(*t, h) && h == j.hash;   // unreadable now: reported, as a write would be
             lk.lock();
@@ -1296,7 +1331,7 @@ void arm_worker() {
 void tex_ww_arm_later(Texture* t, const TexGpu& g, bool have_hash, uint64_t hash) {
     if (!tex_ww_wanted(*t, g)) return;
     if (!have_hash) { tex_ww_arm(*t, g); return; }      // nothing to compare with after the arm (storage not readable): as before
-    mem::ww::Region* r = tex_ww();
+    mem::ww::Region* r = tex_ww_for(*t);
     const uint64_t a = reinterpret_cast<uint64_t>(t->mem), base = mem::ww::region_base(r);
     if (a < base) return;
     if (!g_armq) g_armq = new ArmQueue();
@@ -1308,6 +1343,7 @@ void tex_ww_arm_later(Texture* t, const TexGpu& g, bool have_hash, uint64_t hash
     }
     ArmJob j;
     j.t = Ref<Texture>::share(t);
+    j.r = r;
     j.first = (a - base) >> 12;
     j.count = ((a + t->storage_size - 1 - base) >> 12) - j.first + 1;
     j.hash = hash;
@@ -1443,17 +1479,22 @@ bool tex_rescale(Texture* t, Frame& f, float to, const char* why) {
 }
 
 void tex_poll_cpu_writes() {
-    if (!g_tex_ww) return;
-    g_tex_ww_pages.clear();
-    mem::ww::take_written(g_tex_ww, g_tex_ww_pages);
-    if (g_tex_ww_pages.empty()) return;
-    std::sort(g_tex_ww_pages.begin(), g_tex_ww_pages.end());
-    const uint64_t base = mem::ww::region_base(g_tex_ww);
-    for (size_t i = 0; i < g_tex_ww_pages.size();) {
-        size_t j = i + 1;
-        while (j < g_tex_ww_pages.size() && g_tex_ww_pages[j] <= g_tex_ww_pages[j - 1] + 1) ++j;   // a run of written pages: one call
-        textures_cpu_wrote(reinterpret_cast<const void*>(base + (g_tex_ww_pages[i] << 12)), (g_tex_ww_pages[j - 1] - g_tex_ww_pages[i] + 1) << 12);
-        i = j;
+    for (mem::ww::Region* r : {g_tex_ww, g_tex_ww_phys}) {   // the heap's region and the MapPhysicalMemory one (tex_ww_for)
+        if (!r) continue;
+        g_tex_ww_pages.clear();
+        mem::ww::take_written(r, g_tex_ww_pages);
+        if (g_tex_ww_pages.empty()) continue;
+        static std::atomic<int> s_dbg{0};
+        if (s_dbg.fetch_add(1) < 2000)
+            NXLOG_D("nvn.texdbg", "watch %s: %zu written pages", r == g_tex_ww_phys ? "phys" : "heap", g_tex_ww_pages.size());
+        std::sort(g_tex_ww_pages.begin(), g_tex_ww_pages.end());
+        const uint64_t base = mem::ww::region_base(r);
+        for (size_t i = 0; i < g_tex_ww_pages.size();) {
+            size_t j = i + 1;
+            while (j < g_tex_ww_pages.size() && g_tex_ww_pages[j] <= g_tex_ww_pages[j - 1] + 1) ++j;   // a run of written pages: one call
+            textures_cpu_wrote(reinterpret_cast<const void*>(base + (g_tex_ww_pages[i] << 12)), (g_tex_ww_pages[j - 1] - g_tex_ww_pages[i] + 1) << 12);
+            i = j;
+        }
     }
 }
 

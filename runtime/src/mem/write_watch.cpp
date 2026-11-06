@@ -221,6 +221,23 @@ void fault_stat(const Region* r, uint64_t addr) {
     g_fs_since = now;
 }
 
+// VirtualProtect over [a, a + n), split at the host's allocation boundaries where it has to be: one call cannot span two reservations, and
+// MapPhysicalMemory reserves every 64 KiB granule on its own (svc_memory.cpp), while the heap is one section view (one call, as before).
+// Returns the bytes from a on that now have the protection: n when all of them do.
+uint64_t protect_range(uint64_t a, uint64_t n, DWORD prot) {
+    DWORD was = 0;
+    if (VirtualProtect(reinterpret_cast<void*>(a), static_cast<SIZE_T>(n), prot, &was)) return n;
+    uint64_t cur = a;
+    while (cur < a + n) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(reinterpret_cast<void*>(cur), &mbi, sizeof mbi) != sizeof mbi) break;
+        const uint64_t end = std::min<uint64_t>(a + n, reinterpret_cast<uint64_t>(mbi.BaseAddress) + mbi.RegionSize);
+        if (end <= cur || !VirtualProtect(reinterpret_cast<void*>(cur), static_cast<SIZE_T>(end - cur), prot, &was)) break;
+        cur = end;
+    }
+    return cur - a;
+}
+
 // The guarded pages among [first, first + count) become read-only (armed) again. The caller holds the region's lock exclusive.
 void unguard_locked(Region* r, uint64_t first, uint64_t count) {
     for (uint64_t p = first; p < first + count;) {
@@ -228,8 +245,7 @@ void unguard_locked(Region* r, uint64_t first, uint64_t count) {
         uint64_t q = p;
         while (q < first + count && test(r->guard.get(), q)) ++q;
         // protection first, then the bit: a fault that finds the bit clear must find the page accessible (the read path takes no lock)
-        DWORD was = 0;
-        VirtualProtect(reinterpret_cast<void*>(r->base + p * kPage), static_cast<SIZE_T>((q - p) * kPage), PAGE_READONLY, &was);
+        protect_range(r->base + p * kPage, (q - p) * kPage, PAGE_READONLY);
         set_bits(r->guard.get(), p, q - p, false);
         p = q;
     }
@@ -348,9 +364,14 @@ Gauges g_gauges;
 }  // namespace
 
 Region* region_create(uint64_t addr, uint64_t size) {
-    if (!size || !heap_exists()) return nullptr;
+    if (!size) return nullptr;
     const uint64_t start = addr & ~(kPage - 1), end = (addr + size + kPage - 1) & ~(kPage - 1);
-    if (start < kHeapBase || end > kHeapBase + heap_reserved()) return nullptr;
+    // The heap's primary view, or the alias region: the MapPhysicalMemory pages there (nn::os virtual address memory; Legends Z-A keeps
+    // all its memory so) are private commits that no other view shows. The heap's alias views also lie in the alias region; keeping them out
+    // of what is armed is the owner's job (nvn_gpu_texture.cpp tex_ww_for asks mem::heap_offset_of).
+    const bool in_heap = heap_exists() && start >= kHeapBase && end <= kHeapBase + heap_reserved();
+    const bool in_alias = start >= kAliasBase && end <= kAliasBase + kAliasSize;
+    if (!in_heap && !in_alias) return nullptr;
     auto r = std::make_unique<Region>();
     r->base = start;
     r->npages = (end - start) / kPage;
@@ -384,11 +405,13 @@ Region* region_create(uint64_t addr, uint64_t size) {
         g_live.fetch_add(1, std::memory_order_seq_cst);
     }
     // Pages that another view shows can never be tracked. Published first, so an alias made from now on bans them through ban_section.
-    std::vector<std::pair<uint64_t, uint64_t>> views;
-    heap_alias_ranges(views);
-    for (const auto& v : views) {
-        const uint64_t lo = std::max(start, kHeapBase + v.first), hi = std::min(end, kHeapBase + v.first + v.second);
-        if (lo < hi) set_bits(r->ban.get(), (lo - start) / kPage, (hi - lo) / kPage, true);
+    if (in_heap) {
+        std::vector<std::pair<uint64_t, uint64_t>> views;
+        heap_alias_ranges(views);
+        for (const auto& v : views) {
+            const uint64_t lo = std::max(start, kHeapBase + v.first), hi = std::min(end, kHeapBase + v.first + v.second);
+            if (lo < hi) set_bits(r->ban.get(), (lo - start) / kPage, (hi - lo) / kPage, true);
+        }
     }
     return r.release();
 }
@@ -404,8 +427,7 @@ void region_destroy(Region* r) {
         while (q < r->npages && test(r->prot.get(), q)) ++q;
         set_bits(r->prot.get(), p, q - p, false);
         set_bits(r->guard.get(), p, q - p, false);
-        DWORD was = 0;
-        VirtualProtect(reinterpret_cast<void*>(r->base + p * kPage), static_cast<SIZE_T>((q - p) * kPage), PAGE_READWRITE, &was);
+        protect_range(r->base + p * kPage, (q - p) * kPage, PAGE_READWRITE);
         p = q;
     }
     }
@@ -471,8 +493,9 @@ bool arm(Region* r, uint64_t first, uint64_t count) {
     // then releases the page. A write that lands before the protection does not fault, and the owner's copy (made later) still sees it.
     set_bits(r->prot.get(), first, count, true);
     set_bits(r->valid.get(), first, count, true);
-    DWORD was = 0;
-    if (!VirtualProtect(reinterpret_cast<void*>(a), static_cast<SIZE_T>(n), PAGE_READONLY, &was)) {
+    const uint64_t done = protect_range(a, n, PAGE_READONLY);
+    if (done != n) {
+        if (done) protect_range(a, done, PAGE_READWRITE);   // the part that went through is given back
         set_bits(r->valid.get(), first, count, false);
         set_bits(r->prot.get(), first, count, false);
         return false;
@@ -505,9 +528,9 @@ bool guard(Region* r, uint64_t first, uint64_t count) {
     const uint64_t a = r->base + first * kPage, n = count * kPage;
     if (os_write_overlaps(a, a + n)) return false;
     set_bits(r->guard.get(), first, count, true);
-    DWORD was = 0;
-    if (!VirtualProtect(reinterpret_cast<void*>(a), static_cast<SIZE_T>(n), PAGE_NOACCESS, &was)) {
-        VirtualProtect(reinterpret_cast<void*>(a), static_cast<SIZE_T>(n), PAGE_READONLY, &was);
+    const uint64_t done = protect_range(a, n, PAGE_NOACCESS);
+    if (done != n) {
+        if (done) protect_range(a, done, PAGE_READONLY);
         set_bits(r->guard.get(), first, count, false);
         return false;
     }

@@ -23,6 +23,7 @@
 #include "nxrt/memory.h"
 #include "nxrt/module.h"
 #include "nxrt/svc.h"
+#include "nxrt/write_watch.h"
 
 namespace nxrt {
 namespace {
@@ -367,6 +368,8 @@ void set_gpu_memory_attribute(::Ctx* c) {
 }
 
 // ---- MapMemory (0x04) / UnmapMemory (0x05) -----------------------------------------------------------------------------------
+bool phys_mapped(uint64_t addr, uint64_t size);   // MapPhysicalMemory section below; call with g_mu held
+
 void map_memory(::Ctx* c) {
     const uint64_t dst = reg(c, 0), src = reg(c, 1), size = reg(c, 2);
     if ((dst | src) & kPageMask) {
@@ -382,11 +385,14 @@ void map_memory(::Ctx* c) {
     uint64_t tq0 = ft::now_ns();
     std::lock_guard lk(g_mu);
     ft::event(ft::zone_id("mm.lock"), tq0, ft::now_ns(), 0); tq0 = ft::now_ns();
-    // The source is heap memory or the .data/.bss of a loaded module (state CodeData): the SDK maps thread stacks that live in its
-    // own static data (MapAliasStack of a static buffer), which the console allows.
+    // The source is heap memory, the .data/.bss of a loaded module (state CodeData): the SDK maps thread stacks that live in its
+    // own static data (MapAliasStack of a static buffer), which the console allows; or memory of MapPhysicalMemory (mesosphere maps
+    // it as KMemoryState_Normal, which may be aliased): titles with nn::os virtual address memory allocate thread stacks from a heap
+    // in their reserved regions (Legends Z-A: MapAliasStack of a 256 KiB stack inside its 12 GiB StandardAllocator). The copy below
+    // works for any committed host memory, so all three take the same path.
     const mem::VmInfo sv = mem::vm_query(src);
     const bool src_code_data = sv.state == mem::kMemCodeData && src >= sv.addr && src + size <= sv.addr + sv.size;
-    if (!in_stack(dst, size) || !(in_heap(src, size, heap_now()) || src_code_data) || !mem::is_mapped(src, size)) {
+    if (!in_stack(dst, size) || !(in_heap(src, size, heap_now()) || src_code_data || phys_mapped(src, size)) || !mem::is_mapped(src, size)) {
         fail(c, "MapMemory (range)", kernel::kInvalidMemoryState, dst, src, size);
         return;
     }
@@ -700,6 +706,17 @@ uint16_t page_bits(uint64_t g, uint64_t lo, uint64_t hi) {   // the pages of gra
     const uint64_t first = (a - g) / mem::kPage, n = (e - a) / mem::kPage;
     return static_cast<uint16_t>(((1u << n) - 1u) << first);
 }
+// Every page of [addr, addr + size) is mapped physical memory (a page MapPhysicalMemory backs and UnmapPhysicalMemory has not released).
+bool phys_mapped(uint64_t addr, uint64_t size) {
+    const uint64_t end = addr + size;
+    if (size == 0 || end < addr) return false;
+    for (uint64_t g = addr & ~(kGranule - 1); g < end; g += kGranule) {
+        auto it = g_phys.find(g);
+        const uint16_t want = page_bits(g, addr, end);
+        if (it == g_phys.end() || (it->second & want) != want) return false;
+    }
+    return true;
+}
 bool granule_free(uint64_t g) {   // nothing of the host's (or another window's) in the granule
     MEMORY_BASIC_INFORMATION mi{};
     if (!VirtualQuery(reinterpret_cast<void*>(g), &mi, sizeof mi)) return false;
@@ -742,6 +759,9 @@ void map_physical_memory(::Ctx* c) {
             return;
         }
     }
+    // The texture write tracker may hold pages of this range from an earlier mapping (nvn_gpu_texture.cpp tex_ww_phys): as memory.cpp
+    // does for its own mapping changes, they count as written and none is armed while pages are committed here.
+    mem::ww::OsWriteScope ww_scope(reinterpret_cast<const void*>(addr), size);
     for (uint64_t g = addr & ~(kGranule - 1); g < end; g += kGranule) {
         const uint16_t want = page_bits(g, addr, end);
         auto it = g_phys.find(g);
@@ -799,6 +819,7 @@ void unmap_physical_memory(::Ctx* c) {
                 return;
             }
     }
+    mem::ww::OsWriteScope ww_scope(reinterpret_cast<const void*>(addr), size);   // armed texture pages here are released first
     for (uint64_t g = addr & ~(kGranule - 1); g < end; g += kGranule) {
         auto it = g_phys.find(g);
         if (it == g_phys.end()) continue;

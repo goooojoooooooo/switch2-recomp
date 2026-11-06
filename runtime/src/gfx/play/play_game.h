@@ -69,6 +69,9 @@ enum : unsigned {
 struct GamePlay {
     unsigned display_options = 0;    // kDisplayOpt* bits: which of the options above the game's display hooks apply (0: none)
     uint64_t frame_update = 0;       // entry hook site (offset in main): once per rendered frame, on the main thread; 0 = play mode is never pumped
+    // frame_update is a mid-function site (a `midhook` line in recomp/games/<id>/main.sites) instead of a function entry: for main loops that
+    // call the frame through a virtual method, the loop head is the one place that runs once per iteration (Legends Z-A).
+    bool frame_update_mid = false;
     // Before the frame-boundary hook is added: hooks that do not need the host (display options, the tone curve). window_w/h: the client size.
     void (*install_render)(uint64_t base, const DisplaySettings& d, int window_w, int window_h) = nullptr;
     // After it: input, camera, lock-on, menu widgets.

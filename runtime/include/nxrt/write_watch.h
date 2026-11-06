@@ -21,8 +21,9 @@ namespace nxrt::mem::ww {
 
 struct Region;
 
-// A region over [addr, addr + size) (page aligned down/up). Null when the range is not inside the heap's primary view or the tracker is
-// unavailable. Any thread; the region has one owner thread for the calls below marked "owner".
+// A region over [addr, addr + size) (page aligned down/up). Null when the range is neither inside the heap's primary view nor inside the
+// alias region (mem::kAliasBase: MapPhysicalMemory pages, which no other view shows; the heap's alias views there are the owner's to leave
+// unarmed), or the tracker is unavailable. Any thread; the region has one owner thread for the calls below marked "owner".
 Region* region_create(uint64_t addr, uint64_t size);
 // Makes every armed page writable again and frees the region. Owner.
 void region_destroy(Region* r);

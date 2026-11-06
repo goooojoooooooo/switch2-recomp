@@ -191,6 +191,12 @@ void nvnMemoryPoolFlushMappedRange(const NVNmemoryPool* pool, ptrdiff_t offset, 
     if (!p || !p->base) return;
     uint64_t start = 0;
     const uint64_t n = clip_range(offset, size, p->size, start);
+    {
+        static std::atomic<int> s_dbg{0};
+        if (s_dbg.fetch_add(1) < 2000)
+            NXLOG_D("nvn.texdbg", "pool flush %p +0x%llx (pool flags 0x%x)", static_cast<void*>(p->base + start), static_cast<unsigned long long>(n),
+                    static_cast<unsigned>(p->flags));
+    }
     if (n) textures_cpu_wrote(p->base + start, n);
 }
 

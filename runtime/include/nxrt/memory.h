@@ -21,7 +21,11 @@ constexpr uint64_t kSdkBase = 0x7500000000ull;      // sdk / subsdk modules sit 
 constexpr uint64_t kHeapBase = 0x7800000000ull;     // primary view of the heap section (svcSetHeapSize / nn::os memory heap)
 constexpr uint64_t kHeapMax = 0x300000000ull;       // 12 GiB for the heap view (Switch 2 applications use 8+ GiB)
 constexpr uint64_t kAliasBase = 0x6000000000ull;    // views of heap pages made on request (pools, shared memory, MapMemory)
-constexpr uint64_t kAliasSize = 0x200000000ull;     // 8 GiB
+// 64 GiB, the alias region of a 39-bit address space (mesosphere KAddressSpaceInfo: alias 64 GiB, heap 8 GiB, stack 2 GiB). nn::os's
+// virtual address memory manager (titles with a SystemResourceSize) reserves its address regions in the alias region: Legends Z-A asks
+// StandardAllocator::Initialize(nullptr, 12 GiB) at start-up, and with 8 GiB here that reservation failed and the SDK aborted. Address
+// space only: nothing is reserved on the host up front. Ends at 0x7000000000, below kMainBase.
+constexpr uint64_t kAliasSize = 0x1000000000ull;
 constexpr uint64_t kStackBase = 0x7C00000000ull;    // guest thread stacks handed out by the runtime
 constexpr uint64_t kStackSize = 0x100000000ull;
 constexpr uint64_t kKernelBase = 0x7E00000000ull;   // TLS regions, main-thread stack, kernel-owned memory

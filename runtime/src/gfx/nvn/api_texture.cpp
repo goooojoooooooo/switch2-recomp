@@ -236,6 +236,13 @@ NVNboolean nvnTextureInitialize(NVNtexture* texture, const NVNtextureBuilder* bu
     t->layers = L.layers;
     t->id = next_texture_id(info.device);
     g_textures_created.add(1);
+    {   // debug: where each texture's storage lives and how CPU writes to it can reach the GPU (coherent: page watch; else: flushes)
+        static std::atomic<int> s_dbg{0};
+        if (s_dbg.fetch_add(1) < 4000)
+            NXLOG_D("nvn.texdbg", "texture %u: format %d %dx%dx%d levels %d, storage %p +0x%llx, pool flags 0x%x%s%s", t->id, info.format, info.width,
+                    info.height, info.depth, info.levels, static_cast<void*>(t->mem), static_cast<unsigned long long>(t->storage_size),
+                    static_cast<unsigned>(pool->flags), t->cpu_coherent ? " coherent" : "", pool->is_virtual ? " virtual" : "");
+    }
     const bool was_live = tex_of(texture) != nullptr;        // initialized over a live texture: replaced, not added
 
     if (Texture* old = tex_of(texture)) {                    // initialized twice: the old one goes

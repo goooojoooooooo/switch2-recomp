@@ -16,6 +16,7 @@
 #include "nxrt/log.h"
 #include "nxrt/runtime.h"
 #include "nxrt/memory.h"
+#include "nxrt/services.h"
 #include "nxrt/module.h"
 #include "nxrt/svc.h"
 
@@ -140,10 +141,15 @@ void svc_set_thread_core_mask(::Ctx* c) {      // w0 handle, w1 ideal core (0..3
     }
     int32_t ideal = static_cast<int32_t>(X(c, 1));
     uint64_t mask = X(c, 2);
-    if (ideal == -3) {                                   // keep the ideal core, replace the mask
+    if (ideal == -2) {                                   // IdealCoreUseProcessValue: the mask argument is ignored
+        // mesosphere (svc SetThreadCoreMask): core = the process's ideal core (main.npdm's default core), mask = 1 << core.
+        // Legends Z-A's worker threads pass mask 0 with it, which the mask check below would refuse.
+        ideal = nxrt::services::profile().main_thread_core;
+        mask = 1ull << ideal;
+    } else if (ideal == -3) {                            // keep the ideal core, replace the mask
         if (!mask) return fail(kInvalidCombination);
         ideal = t->ideal_core;
-    } else if (ideal != -2 && (ideal < -1 || ideal > 7)) {              // -1 = IdealCoreDontCare: only the mask matters
+    } else if (ideal < -1 || ideal > 7) {               // -1 = IdealCoreDontCare: only the mask matters
         return fail(kInvalidCoreId);
     } else if (!mask) {
         return fail(kInvalidCombination);
