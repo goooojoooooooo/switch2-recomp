@@ -1,0 +1,3 @@
+# hook sites of main (none yet)
+# Same format as recomp/games/pkp/main.sites. Play mode needs `entryhook <frame update address>` here once the game's per-frame
+# function on the main thread is found (pkp: entryhook 0x7101fdcde4); until then the runtime runs the game without play-mode hooks.

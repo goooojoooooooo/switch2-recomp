@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Game manifest of Pokémon Legends: Z-A (same format as recomp/games/pkp/game.toml; read there for every key's meaning).
+#
+# STATUS: skeleton. The block between the BEGIN/END DUMP markers holds placeholders (all-zero hashes and build id, guessed module
+# list and units) until `python -I recomp/games/plza/fill_manifest.py --exefs <your dump>/exefs` writes the real values from YOUR
+# dump. With the placeholders the launcher's dump check refuses every dump, as it should.
+# Also to confirm from the dump: [game] platform (the Switch 2 Edition is expected to be an NVN2 build) and version.
+schema = 1
+
+[game]
+id = "plza"
+title = "Pokémon Legends: Z-A"
+short_title = "Legends Z-A"
+product = "Pokémon Legends: Z-A PC"
+title_id = "0100F43008C44000"
+version = "0.0.0"
+platform = "switch2"
+languages = 0x1ffff
+
+[files]
+exe = "plza.exe"
+runtime_dll = "plza_rt.dll"
+ini = "plza.ini"
+log = "plza.log"
+setup_exe = "plza_setup.exe"
+launcher_ini = "plza_launcher.ini"
+shader_pack = "shader_cache.plzashc"
+save_folder = "LegendsZARecompPC"
+
+# --- BEGIN DUMP (written by fill_manifest.py; edits inside are replaced) ---
+[dump]
+version = "unknown"
+display_version = "unknown"
+main_build_id = "0000000000000000000000000000000000000000"
+example_folder = "LegendsZA_dump"
+
+[[dump.file]]
+name = "main"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+[[dump.file]]
+name = "sdk"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+[[dump.file]]
+name = "subsdk0"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+[[dump.file]]
+name = "rtld"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+[[dump.file]]
+name = "main.npdm"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[module]]
+name = "main"
+file = "main"
+base = 0x7100000000
+index = 0
+units = 230
+sites = "main.sites"
+[[module]]
+name = "sdk"
+file = "sdk"
+base = 0x7500000000
+index = 1
+units = 45
+[[module]]
+name = "subsdk0"
+file = "subsdk0"
+base = 0x7600000000
+index = 2
+units = 4
+[[module]]
+name = "rtld"
+file = "rtld"
+base = 0x7700000000
+index = 3
+units = 1
+entry = true
+# --- END DUMP ---
+
+# Z-A is a Game Freak engine title, not KTGL: only the generic NVN2 extractor applies.
+[shaders]
+extractor = "generic"
+extractor_script = "tools/shaders/scripts/extract_generic.py"
+
+[launcher]
+name = "Legends Z-A Launcher"
+window_title = "Legends Z-A Launcher"
+product_name = "LegendsZALauncher"
+identifier = "org.plza-recomp.launcher"
+package_name = "LegendsZARecomp"
+disclaimer = "Nintendo, The Pokemon Company, or GAME FREAK"
