@@ -2,10 +2,10 @@
 #
 # Game manifest of Pokémon Legends: Z-A (same format as recomp/games/pkp/game.toml; read there for every key's meaning).
 #
-# STATUS: skeleton. The block between the BEGIN/END DUMP markers holds placeholders (all-zero hashes and build id, guessed module
-# list and units) until `python -I recomp/games/plza/fill_manifest.py --exefs <your dump>/exefs` writes the real values from YOUR
-# dump. With the placeholders the launcher's dump check refuses every dump, as it should.
-# Also to confirm from the dump: [game] platform (the Switch 2 Edition is expected to be an NVN2 build) and version.
+# The dump block (BEGIN/END DUMP) is written by fill_manifest.py from the update v393216 exefs (the code that runs).
+# platform: switch1. That exefs is a Switch 1 build even in the "Switch 2 Edition" package: NintendoSDK 19.3.11, NVN (not NVN2),
+# main.npdm ThreadInfo cores 0..2. Modules: main, sdk, rtld (no subsdk).
+# version: the update's title version number; the display version and languages need control.nacp, which the dump does not hold.
 schema = 1
 
 [game]
@@ -14,8 +14,8 @@ title = "Pokémon Legends: Z-A"
 short_title = "Legends Z-A"
 product = "Pokémon Legends: Z-A PC"
 title_id = "0100F43008C44000"
-version = "0.0.0"
-platform = "switch2"
+version = "393216"
+platform = "switch1"
 languages = 0x1ffff
 
 [files]
@@ -30,56 +30,48 @@ save_folder = "LegendsZARecompPC"
 
 # --- BEGIN DUMP (written by fill_manifest.py; edits inside are replaced) ---
 [dump]
-version = "unknown"
-display_version = "unknown"
-main_build_id = "0000000000000000000000000000000000000000"
+version = "393216"
+display_version = "v393216"
+main_build_id = "b1f12fd919eae86ab8a978317677e64bce443d1f"
 example_folder = "LegendsZA_dump"
 
 [[dump.file]]
 name = "main"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+sha256 = "2308530d73b7fea60bb845ad57d9b1f10d3ff213f89c01f73627dc8224f43ef9"
 [[dump.file]]
 name = "sdk"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-[[dump.file]]
-name = "subsdk0"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+sha256 = "0449487b457490afae879c08d6a90dd28295eaaa5c55677089a46b13991afbab"
 [[dump.file]]
 name = "rtld"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+sha256 = "714ead44bbd81ccba54509399a5dca59c1a24e068b384292f6755829f1e9d523"
 [[dump.file]]
 name = "main.npdm"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+sha256 = "d9628a99180dd3d19e58146057086bb33d85944ca11e5f8fc2f43ad7fddc9042"
 
 [[module]]
 name = "main"
 file = "main"
 base = 0x7100000000
 index = 0
-units = 230
+units = 288
 sites = "main.sites"
 [[module]]
 name = "sdk"
 file = "sdk"
 base = 0x7500000000
 index = 1
-units = 45
-[[module]]
-name = "subsdk0"
-file = "subsdk0"
-base = 0x7600000000
-index = 2
-units = 4
+units = 37
 [[module]]
 name = "rtld"
 file = "rtld"
 base = 0x7700000000
-index = 3
+index = 2
 units = 1
 entry = true
 # --- END DUMP ---
 
-# Z-A is a Game Freak engine title, not KTGL: only the generic NVN2 extractor applies.
+# Z-A is a Game Freak (Trinity) engine title, not KTGL, so only the generic extractor can apply. It was written for NVN2 games;
+# whether it finds Z-A's NVN1 shaders (inside romfs/arc/data.trpfs) is untested.
 [shaders]
 extractor = "generic"
 extractor_script = "tools/shaders/scripts/extract_generic.py"

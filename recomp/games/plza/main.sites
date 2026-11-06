@@ -1,3 +1,4 @@
-# hook sites of main (none yet)
-# Same format as recomp/games/pkp/main.sites. Play mode needs `entryhook <frame update address>` here once the game's per-frame
-# function on the main thread is found (pkp: entryhook 0x7101fdcde4); until then the runtime runs the game without play-mode hooks.
+# hook sites of main (update v393216; same format as recomp/games/pkp/main.sites)
+# frame boundary: the head of the main loop in 0x7101b290e0 (x8 = app->vtable[0x18]; r = x8(app); loop while r & 1), once per iteration on
+# the main thread. A mid-function site: runtime/games/plza/plza_game.cpp GamePlay::frame_update_mid.
+midhook 0x7101b291e4

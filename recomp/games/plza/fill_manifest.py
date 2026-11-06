@@ -45,7 +45,9 @@ def nso_info(path):
         head = f.read(0x100)
     if len(head) < 0x60 or head[:4] != b'NSO0':
         raise SystemExit('%s is not a decrypted NSO (no NSO0 magic)' % path)
-    return {'build_id': head[0x40:0x54].hex(), 'text_size': struct.unpack_from('<I', head, 0x18)[0]}
+    flags = struct.unpack_from('<I', head, 0xC)[0]
+    # the header is never compressed, so build id and .text size read the same with LZ4 or ZBIC segments (runtime/docs/zbic.md)
+    return {'build_id': head[0x40:0x54].hex(), 'text_size': struct.unpack_from('<I', head, 0x18)[0], 'zbic': bool(flags & 0x80)}
 
 
 def npdm_program_id(path):
@@ -122,7 +124,11 @@ def main(argv=None):
     tomllib.loads(text)                                  # never write a manifest that does not parse
 
     for m in mods:
-        print('%-8s index %d  base 0x%x  units %4d  build %s' % (m['name'], m['index'], m['base'], m['units'], m['build_id']))
+        print('%-8s index %d  base 0x%x  units %4d  build %s%s' % (m['name'], m['index'], m['base'], m['units'], m['build_id'],
+                                                                   '  (ZBIC)' if m['zbic'] else ''))
+    if any(m['zbic'] for m in mods):
+        print('NOTE: ZBIC-compressed NSOs. The hashes above are of the files as dumped; the lifter reads plain NSOs only, so convert '
+              'a copy first: nx_extract --plain-nso <exefs> <out> (tools/extract, runtime/docs/zbic.md).', file=sys.stderr)
     if a.dry_run:
         print(new)
         return 0
